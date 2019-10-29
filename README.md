@@ -2,6 +2,12 @@
 
 <br><br><br>
 
+# Changes
+
+We add birds_dataset.py and modifdy data/__init__.py to use it. Also, we add a link to the dataset in datasets.
+
+Run with: `python train.py --dataset_mode birds --dataroot ./datasets/birds --name facades_pix2pix --model pix2pix --netG unet_128`
+
 # CycleGAN and pix2pix in PyTorch
 
 We provide PyTorch implementations for both unpaired and paired image-to-image translation.
