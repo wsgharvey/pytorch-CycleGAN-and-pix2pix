@@ -131,8 +131,9 @@ def get_observed_patch(images, R, C, scale, att_dim,
 def sample_bird_glimpse_sequence():
     T = 4
     t = np.random.randint(1, T)
-    return [sample_bird_glimpse_location()
-            for _ in range(t)]
+    return [(32, 32, 4)] + \
+           [sample_bird_glimpse_location()
+            for _ in range(t-1)]
 
 
 class BirdsDataset(BaseDataset):
