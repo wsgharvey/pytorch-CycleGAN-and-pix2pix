@@ -8,6 +8,15 @@ We add birds_dataset.py and modifdy data/__init__.py to use it. Also, we add a l
 
 Run with: `python train.py --dataset_mode birds --dataroot ./datasets/birds --name facades_pix2pix --model pix2pix --netG unet_128`
 
+To run remotely (e.g. on alexandria): 
+`**run command** --display_port 8090`
+
+`ssh -N -L 127.0.0.1:8090:127.0.0.1:8090 alexandria`
+
+I used `visdom -port 8090` locally but think this is not necessary.
+
+Stuff at `http://localhost:8090/` in browser
+
 # CycleGAN and pix2pix in PyTorch
 
 We provide PyTorch implementations for both unpaired and paired image-to-image translation.
