@@ -20,6 +20,128 @@ import torch.nn.functional as F
 import glob
 from collections import OrderedDict
 import numpy as np
+from scipy.ndimage.morphology import binary_erosion
+
+class allow_unbatched(object):
+    def __init__(self, input_correspondences):
+        self.input_correspondences = \
+            OrderedDict(input_correspondences)
+
+    def __call__(self, f):
+        def wrapped(*args, **kwargs):
+            args = list(args)
+            to_unbatch = []
+            for inp_i, out_is in \
+                    self.input_correspondences.items():
+                inp = args[inp_i]
+                assert len(inp.shape) in [3, 4]
+                is_batched = len(inp.shape)==4
+                if not is_batched:
+                    args[inp_i] = inp.unsqueeze(0)
+                    to_unbatch += out_is
+            ret = f(*args, **kwargs)
+            if type(ret) is not tuple:
+                ret = (ret,)
+            ret = list(ret)
+            for out_i in to_unbatch:
+                ret[out_i] = ret[out_i].squeeze(0)
+            return tuple(ret) if len(ret) > 1 else ret[0]
+        return wrapped
+
+@allow_unbatched({0: [0]})
+def upsample(x, new_size=None, scaling=None):
+    if new_size is None:
+        H = x.shape[2]
+        assert H % scaling == 0
+        new_size = H // scaling
+    return F.interpolate(x,
+                         (new_size, new_size),
+                         mode='bilinear',
+                         align_corners=False)
+
+@allow_unbatched({0: [0]})
+def downsample(x, new_size=None, scaling=None):
+    if scaling is None:
+        H = x.shape[2]
+        assert H % new_size == 0
+        scaling = H // new_size
+    elif scaling == 1:
+        return x
+    return F.avg_pool2d(x, stride=scaling,
+                        kernel_size=scaling)
+
+@allow_unbatched({0: [0]})
+def erode(binary_image, erosion=1):
+    """
+    Sets 1s at boundaries of binary_image to 0
+    """
+    batch_array = binary_image.data.cpu().numpy()
+    return torch.tensor(
+        np.stack([
+            binary_erosion(
+                array,
+                iterations=erosion,
+                border_value=1,  # so that we don't get border of zeros
+            ).astype(array.dtype)
+            for array in batch_array])
+    ).to(binary_image.device)
+
+BIRD_ATT_SCALES = [1, 2, 4, 8]
+BIRD_ATT_DIM = 16
+BIRD_IMG_DIM = 128
+
+@allow_unbatched({1: [0], 2: []})
+def embed(glimpsed_images,
+          completion_images,
+          locations,
+          erosion=1):
+    """
+    images can be batched, locations cannot be
+    """
+    locations = [(scale, [(x, y) for x, y, s in
+                          locations if s == scale])
+                 for scale in BIRD_ATT_SCALES]
+    inputs = []
+    for scale, coords in locations:
+        completion = downsample(completion_images,
+                                scaling=scale)
+        if len(coords) == 0:
+            morphed = torch.cat(
+                [completion,
+                 completion[:, :1]*0.],  # mask channel
+                dim=1)
+        else:
+            B, _, H, W = completion.shape
+            glimpsed = downsample(glimpsed_images,
+                                  scaling=scale)
+            scaled_coords = [(r//scale, c//scale)
+                             for r, c in coords]
+            obs_mask = build_mask(
+                shape=(H, W),
+                att_shape=(BIRD_ATT_DIM,
+                           BIRD_ATT_DIM),
+                locations=scaled_coords
+            ).unsqueeze(0)\
+            .unsqueeze(0)\
+            .to(glimpsed.device)  # batch + channel dims
+            # erode each masks to make some zeros:
+            eroded_obs_mask = erode(obs_mask,
+                                    erosion)
+            eroded_completion_mask = erode(1-obs_mask,
+                                           self.erosion)
+            morphed = (completion *\
+                       eroded_completion_mask) + \
+                       (glimpsed *\
+                        eroded_obs_mask)
+            morphed = torch.cat([
+                morphed,
+                obs_mask.expand(B, -1, -1, -1)],
+                                dim=1)
+            inputs.append(
+                upsample(morphed, new_size=BIRD_IMG_DIM)
+            )
+        return torch.cat(inputs, dim=1)
+
 
 class allow_unbatched(object):
     def __init__(self, input_correspondences):
@@ -180,8 +302,7 @@ class BirdsDataset(BaseDataset):
             T.ToTensor(),
         ])
 
-    def mask_out(self, image):
-        sequence = sample_bird_glimpse_sequence()
+    def mask_out(self, image, sequence):
         return reconstruct_obs(image, sequence)
 
     def __getitem__(self, index):
@@ -203,7 +324,8 @@ class BirdsDataset(BaseDataset):
         path = self.image_paths[index]
         data_B = self.transform(Image.open(path))\
                      .expand(3, -1, -1)  # convert any grayscales to RGB
-        data_A = self.mask_out(data_B)
+        # sequence = sample_bird_glimpse_sequence()
+        data_A = data_B # we now do this in pix2pix_model.py   self.mask_out(data_B, sequence)
         return {'A': data_A, 'B': data_B, 'A_paths': path, 'B_paths': path}
 
     def __len__(self):
